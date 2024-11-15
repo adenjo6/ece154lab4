@@ -24,87 +24,109 @@ module ucsbece154a_datapath (
 
 
 /// Your code here
-wire [6:0] opcode   = instr_i[6:0];
-wire [4:0] rd       = instr_i[11:7];
-wire [2:0] funct3   = instr_i[14:12];
-wire [4:0] rs1      = instr_i[19:15];
-wire [4:0] rs2      = instr_i[24:20];
-wire [6:0] funct7   = instr_i[31:25];
 
-reg [31:0] immext;
-always @(*) begin
-    case (ImmSrc_i)
-        imm_Itype: // I-type immediate
-            immext = {{20{instr_i[31]}}, instr_i[31:20]};
-        imm_Stype: // S-type immediate
-            immext = {{20{instr_i[31]}}, instr_i[31:25], instr_i[11:7]};
-        imm_Btype: // B-type immediate
-            immext = {{19{instr_i[31]}}, instr_i[31], instr_i[7],
-                       instr_i[30:25], instr_i[11:8], 1'b0};
-        imm_Jtype: // J-type immediate
-            immext = {{11{instr_i[31]}}, instr_i[31], instr_i[19:12],
-                       instr_i[20], instr_i[30:21], 1'b0};
-        imm_Utype: // U-type immediate
-            immext = {instr_i[31:12], 12'b0};
-        default:
-            immext = 32'b0;
-    endcase
-end
-
-wire [31:0] rd1, rd2;
-rf register_file (
-    .clk(clk),
-    .we(RegWrite_i),
-    .ra1(rs1),
-    .ra2(rs2),
-    .wa(rd),
-    .wd(result),
-    .rd1(rd1),
-    .rd2(rd2)
-);
-
-wire [31:0] srcA = rd1;
-wire [31:0] srcB = ALUSrc_i ? immext : rd2;
-
-wire [31:0] alu_result;
-wire        zero;
-
-assign zero_o       = zero;
-assign aluresult_o  = alu_result;
-
-alu alu_inst (
-    .a(srcA),
-    .b(srcB),
-    .alu_control(ALUControl_i),
-    .result(alu_result),
-    .zero(zero)
-);
-
-wire [31:0] pcplus4  = pc_o + 4;
-wire [31:0] pcbranch = pc_o + immext;
-wire [31:0] pcnext   = PCSrc_i ? pcbranch : pcplus4;
-
-always @(posedge clk or posedge reset) begin
-    if (reset)
-        pc_o <= 0;
-    else
-        pc_o <= pcnext;
-end
-
-reg [31:0] result;
-
-always @(*) begin
-    case (ResultSrc_i)
-        ResultSrc_ALU:  result = alu_result;   // ALU result
-        ResultSrc_load: result = readdata_i;   // Data loaded from memory
-        ResultSrc_jal:  result = pcplus4;      // PC + 4 (for jal instruction)
-        ResultSrc_lui:  result = immext;       // Immediate value (for lui)
-        default:        result = 32'b0;
-    endcase
-end
-
-assign writedata_o = rd2;
 // Use name "rf" for a register file module so testbench file work properly (or modify testbench file) 
 
+wire [31:0] RD1; //Same as SrcA
+wire [31:0] RD2;
+reg [31:0] SrcA; 
+reg [31:0] SrcB;
+reg [31:0] ImmExt;
+reg [31:0] result;
+reg [31:0] PCNext; 
+reg [31:0] PCPlus4; 
+reg [31:0] PCTarget;
 
+
+
+
+ucsbece154a_alu alu (
+    .a_i(SrcA), .b_i(SrcB),
+    .alucontrol_i(ALUControl_i),
+    .result_o(aluresult_o),
+    .zero_o(zero_o)
+);
+
+ucsbece154a_rf rf(
+    .clk(clk),
+    .a1_i(instr_i[19:15]), .a2_i(instr_i[24:20]), .a3_i(instr_i[11:7]),
+    .rd1_o(RD1), .rd2_o(RD2),
+    .we3_i(RegWrite_i),
+    .wd3_i(result)
+);
+
+assign writedata_o = RD2; 
+
+initial begin
+	pc_o = 0; 
+	PCNext = 0;
+end
+
+always @ * begin
+	//ImmExt
+	if(ImmSrc_i == 3'b000)begin
+    	ImmExt[31:12] = instr_i[31];
+    	ImmExt[11:0] = instr_i[31:20]; //Check this in testing to make sure extension is being done properly
+	end 
+	else if(ImmSrc_i == 3'b001) begin
+    	ImmExt[31:12] = instr_i[31]; 
+    	ImmExt[11:5] = instr_i[31:25];
+    	ImmExt[4:0] = instr_i[11:7];
+	end 
+	else if(ImmSrc_i == 3'b010) begin
+    	ImmExt[31:12] = instr_i[31]; 
+    	ImmExt[11] = instr_i[7];
+    	ImmExt[10:5] = instr_i[30:25];
+    	ImmExt[4:1] = instr_i[11:8];
+    	ImmExt[0] = 0; 
+	end
+	else if(ImmSrc_i == 3'b011) begin
+	ImmExt[31:20] = instr_i[31]; 
+	ImmExt[19:12] = instr_i[19:12]; 
+	ImmExt[11] = instr_i[20];
+	ImmExt[10:1] = instr_i[30:21];
+	ImmExt[0] = 0; 
+	end 
+	else if(ImmSrc_i == 3'b100) begin
+	ImmExt[31:12] = instr_i[31:12];
+	ImmExt[11:0] = 0; 
+	end
+
+	//SrcA Mux
+	SrcA = RD1;
+	if (ImmSrc_i == 3'b100) begin
+		SrcA = 0; 
+	end
+	
+
+	//SrcB Mux
+    	SrcB = RD2;
+    	if (ALUSrc_i) begin
+        	SrcB = ImmExt;
+	end
+
+	//PC Math
+	PCPlus4 <= pc_o + 4; 
+	PCTarget <= pc_o + ImmExt; 
+	PCNext = PCPlus4; 
+	if (PCSrc_i) begin
+		PCNext <= PCTarget; 
+    	end
+
+	//Result Mux
+	if (ImmSrc_i == 3'b100)begin
+		result = aluresult_o;
+	end else begin
+		result = {20'b00000000000000000000,aluresult_o[11:0]};
+	end
+    	if (ResultSrc_i == 2'b01) begin
+		result = readdata_i; 
+    	end else if (ResultSrc_i == 2'b10) begin
+		result = PCPlus4;
+	end
+end
+
+always @ (posedge clk) begin
+	pc_o <= PCNext;
+end
 endmodule
